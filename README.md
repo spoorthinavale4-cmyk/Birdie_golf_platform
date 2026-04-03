@@ -1,6 +1,28 @@
-# 🏌️ Birdie — Golf Charity Subscription Platform
+# Birdie — Golf Charity Subscription Platform
 
-> Full-stack Next.js application built for the Digital Heroes trainee assignment.
+> A full-stack subscription platform where golfers log scores, enter monthly prize draws, and direct a portion of every membership to a charity of their choosing. Built with a production-grade architecture using real infrastructure throughout.
+
+---
+
+## Overview
+
+Birdie is a premium golf membership product with three interlocking pillars:
+
+- **Score tracking** — Members log Stableford rounds; their five most recent scores become their active draw entries for the month.
+- **Monthly prize draw** — A transparent, tiered lottery engine matches member scores against drawn numbers, distributing a live prize pool across three winning tiers.
+- **Charitable giving** — Every subscription directs a minimum of 10% to a member-selected cause, with impact visible throughout the member experience.
+
+The platform spans a public landing experience, a protected member dashboard, and a full admin panel for draw management, winner verification, and charity curation.
+
+---
+
+## A Note on Payments
+
+> **Stripe integration is present in architecture but not live in this deployment.**
+>
+> The payment flow — subscription creation, webhook handling, and renewal-based charity contribution calculation — is fully implemented in code using Stripe's API. However, due to Stripe account verification constraints, the deployed version uses a **simulated/dummy payment system** that mirrors the real flow without processing actual transactions.
+>
+> All other infrastructure — authentication, database, row-level security, draw logic, admin workflows, charity data — is **entirely real and production-grade**.
 
 ---
 
@@ -9,41 +31,104 @@
 | Layer | Technology |
 |---|---|
 | Framework | Next.js 14 (App Router) |
-| Database + Auth | Supabase (Postgres + RLS + Storage) |
-| Payments | Stripe (Subscriptions + Webhooks) |
-| Styling | Tailwind CSS + Framer Motion |
+| Database & Auth | Supabase — PostgreSQL, Row-Level Security, Storage |
+| Payments (architecture) | Stripe — Subscriptions, Webhooks, Price IDs |
+| Styling | Tailwind CSS v3, Framer Motion |
 | Deployment | Vercel |
+| Language | TypeScript throughout |
 
 ---
 
-## Getting Started
+## Core Features
 
-### 1. Clone & Install
+### Score System
+- Members submit Stableford scores (1–45) with a round date
+- A **Postgres trigger** enforces a strict 5-score rolling window at the database level — the oldest score is dropped automatically when a sixth is added
+- Enforcement lives at the DB layer, making it impossible to bypass through any client or API
+
+### Draw Engine (`/lib/draw-engine.ts`)
+- **Random mode** — Standard lottery draw: 5 unique numbers from 1–45
+- **Algorithmic mode** — Inverted frequency weighting: numbers members have entered least frequently carry the highest draw probability, creating genuine excitement and making jackpot hits feel meaningful
+- Admins can simulate a draw privately before publishing results
+- Jackpot rolls over to the following month if no 5-match winner is found
+
+### Prize Structure
+
+| Tier | Pool Allocation | Jackpot Rollover |
+|---|---|---|
+| 5 Numbers matched | 40% | Yes — carries to next draw |
+| 4 Numbers matched | 35% | No |
+| 3 Numbers matched | 25% | No |
+
+Winners within the same tier split that tier's allocation equally.
+
+### Charity System
+- Charity selected by the member at signup
+- A minimum 10% contribution is built into every plan
+- Contribution amounts are calculated per renewal via Stripe webhook events
+- Admins can manage the charity directory, feature organisations, and upload imagery
+
+### Winner Verification
+- Winners upload a proof screenshot via the member dashboard
+- Admins review and progress through a formal status flow: `pending → verified → paid` (or `rejected`)
+- Keeps winnings accountable and auditable
+
+---
+
+## Project Structure
+
+```
+app/
+  (public)/           Public pages — landing, charities, draw results
+  (auth)/             Authentication — login, signup
+  (dashboard)/        Protected member portal
+  (admin)/            Admin panel — draws, winners, charities, users
+  api/                API routes — webhooks, draw runner, subscription creation
+
+lib/
+  draw-engine.ts      Core draw and prize pool logic
+  stripe.ts           Stripe client configuration
+  supabase.ts         Browser-side Supabase client
+  supabase-server.ts  Server and admin Supabase clients
+  utils.ts            Shared utilities and helpers
+
+types/index.ts        Full TypeScript type definitions
+supabase/schema.sql   Complete DB schema — tables, triggers, RLS policies, seed data
+```
+
+---
+
+## Architecture Decisions
+
+**Database-level score enforcement**
+Moving the 5-score limit to a Postgres trigger means it cannot be circumvented by any application layer or API call. Consistency is guaranteed at the data source.
+
+**Idempotent webhook handlers**
+Stripe may deliver the same event more than once. All webhook handlers use `upsert` with conflict resolution to ensure duplicate deliveries are safe and produce no side effects.
+
+**Service role for admin operations**
+Admin API routes use `SUPABASE_SERVICE_ROLE_KEY`, which bypasses RLS intentionally for trusted server-side actions. All member-facing operations use the anon key with full RLS enforcement.
+
+**Algorithmic draw rationale**
+Inverted frequency weighting ensures that rarely-entered numbers are most likely to appear in the draw result. This makes matching all five numbers genuinely hard, sustaining jackpot interest across rollovers and rewarding members who engage consistently.
+
+---
+
+## Local Development
+
+### 1. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 2. Supabase Setup
+### 2. Configure Supabase
 
-1. Create a **new Supabase project** at [supabase.com](https://supabase.com)
-2. Go to **SQL Editor** and run the full contents of `/supabase/schema.sql`
-3. This creates all tables, triggers, RLS policies, storage buckets, and seeds 5 charities
+1. Create a project at [supabase.com](https://supabase.com)
+2. In the SQL Editor, run the full contents of `supabase/schema.sql`
+3. This provisions all tables, triggers, RLS policies, storage buckets, and seeds the charity directory
 
-### 3. Stripe Setup
-
-1. Create a Stripe account at [stripe.com](https://stripe.com)
-2. Create two products in Stripe Dashboard:
-   - **Monthly** — £10/month recurring
-   - **Annual** — £96/year recurring
-3. Copy the **Price IDs** (start with `price_...`)
-4. In Stripe → Developers → Webhooks, add endpoint:
-   - URL: `https://your-domain.vercel.app/api/webhooks/stripe`
-   - Events: `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_succeeded`, `invoice.payment_failed`
-
-### 4. Environment Variables
-
-Copy `.env.example` to `.env.local` and fill in:
+### 3. Configure environment variables
 
 ```bash
 cp .env.example .env.local
@@ -61,105 +146,37 @@ STRIPE_MONTHLY_PRICE_ID=price_...
 STRIPE_YEARLY_PRICE_ID=price_...
 
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
+ADMIN_EMAIL=admin@yourdomain.com
 ```
 
-### 5. Run Locally
+### 4. Run the dev server
 
 ```bash
 npm run dev
 ```
 
-### 6. Deploy to Vercel
+---
+
+## Deployment
+
+The project deploys to Vercel with zero additional configuration beyond environment variables.
 
 ```bash
-npm i -g vercel
 vercel --prod
 ```
 
-Set all environment variables in Vercel dashboard → Settings → Environment Variables.
+Set all variables listed above in **Vercel → Settings → Environment Variables**, including `NEXT_PUBLIC_SITE_URL` pointing to your live domain.
 
 ---
 
-## Test Credentials
+## Admin Access
 
-After deployment, create accounts via the signup flow:
+1. Sign up via `/signup` using the email set as `ADMIN_EMAIL`
+2. In Supabase → Table Editor → `profiles`, set `role = 'admin'` manually
+3. Admin panel is then accessible at `/admin`
 
-### Admin Account
-1. Sign up with any email
-2. In Supabase → Table Editor → `profiles`, set `role = 'admin'` for your user
-3. Admin panel accessible at `/admin`
-
-### Subscriber Account
-1. Sign up normally via `/signup`
-2. Use Stripe test card: `4242 4242 4242 4242`, any future date, any CVC
+For testing subscriptions in a real Stripe environment, use test card `4242 4242 4242 4242` with any future expiry and any CVC.
 
 ---
 
-## Key Features
-
-### Score System
-- Users enter Stableford scores (1–45) with a date
-- **DB trigger** automatically enforces 5-score rolling window
-- Oldest score is removed when 6th is added
-
-### Draw Engine (`/lib/draw-engine.ts`)
-- **Random mode**: Standard lottery, 5 unique numbers from 1–45
-- **Algorithmic mode**: Inverted frequency weighting — least common user scores have highest draw probability
-- Admin can simulate before publishing
-- Jackpot rolls over to next month if no 5-match winner
-
-### Prize Pools
-| Match | Pool Share | Rollover |
-|---|---|---|
-| 5 Numbers | 40% | ✅ Yes (Jackpot) |
-| 4 Numbers | 35% | ❌ No |
-| 3 Numbers | 25% | ❌ No |
-
-Multiple winners in same tier split the prize equally.
-
-### Charity System
-- Users select charity at signup (minimum 10% contribution)
-- Contribution calculated on each subscription renewal via Stripe webhook
-- Admin can manage charity listings, feature charities, upload images
-
-### Winner Verification
-- Winners upload proof screenshot
-- Admin reviews: Approve → Verified → Mark as Paid
-- Status flow: `pending → verified → paid` (or `rejected`)
-
----
-
-## Project Structure
-
-```
-app/
-  (public)/          — Landing, charities, draws (no auth)
-  (auth)/            — Login, signup
-  (dashboard)/       — User portal (protected)
-  (admin)/           — Admin panel (admin role only)
-  api/               — API routes (webhooks, draws, subscriptions)
-lib/
-  draw-engine.ts     — Core draw + prize pool logic
-  stripe.ts          — Stripe config
-  supabase.ts        — Browser client
-  supabase-server.ts — Server + admin clients
-  utils.ts           — Helpers
-types/index.ts       — TypeScript types
-supabase/schema.sql  — Full DB schema + triggers + RLS + seed data
-```
-
----
-
-## Architecture Decisions
-
-**Why DB trigger for score limit?**
-Moving the 5-score enforcement to a Postgres trigger means it's impossible to bypass via any client or API. No app-layer logic can accidentally create inconsistency.
-
-**Why idempotent webhook handlers?**
-Stripe may deliver webhooks more than once. All handlers use `upsert` with conflict resolution to prevent duplicate records.
-
-**Why service role for admin operations?**
-Admin API routes use `SUPABASE_SERVICE_ROLE_KEY` which bypasses RLS — this is correct for trusted server-side admin actions. All other operations use the anon key with RLS enforced.
-
-**Draw algorithm rationale:**
-The inverted frequency weighting means numbers players rarely enter have the highest draw probability. This creates genuine lottery excitement because matching 5 numbers is harder, making the jackpot feel earned and driving jackpot rollovers.
+*Birdie — Play better rounds. Turn them into something bigger.*
