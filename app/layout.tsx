@@ -17,7 +17,7 @@ const playfair = Playfair_Display({
 })
 
 export const metadata: Metadata = {
-  metadataBase: new URL('http://localhost:3000'),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'),
   title: 'Birdie - Golf with Purpose',
   description: 'Play golf. Win prizes. Fund causes that matter.',
   keywords: ['golf', 'charity', 'subscription', 'prize draw', 'stableford'],
